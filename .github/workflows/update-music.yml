@@ -1,0 +1,60 @@
+name: Update YouTube Music Card
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "scripts/ytmusic_widget.py"
+      - "site/index.html"
+      - ".github/workflows/update-music.yml"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: true
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Generate listening card
+        env:
+          YTMUSIC_COOKIES: ${{ secrets.YTMUSIC_COOKIES }}
+        run: python scripts/ytmusic_widget.py
+
+      - name: Prepare website
+        run: |
+          mkdir -p site
+          cp scripts/listening.svg site/listening.svg
+          cp scripts/now_playing.json site/now_playing.json
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v4
