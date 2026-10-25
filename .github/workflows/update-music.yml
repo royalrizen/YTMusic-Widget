@@ -2,7 +2,8 @@ name: Update YouTube Music Card
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "*/5 * * * *"
+
   workflow_dispatch:
   push:
     branches:
