@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import re
@@ -212,15 +213,54 @@ def get_songs(data, all_songs=False, limit=50):
     return songs
 
 
+def embed_thumbnail(thumbnail_url):
+    if not thumbnail_url:
+        return None
+
+    try:
+        response = requests.get(
+            thumbnail_url,
+            timeout=15,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (X11; Linux x86_64) "
+                    "AppleWebKit/537.36 Chrome/139.0.0.0 "
+                    "Safari/537.36"
+                )
+            },
+        )
+        response.raise_for_status()
+
+        content_type = response.headers.get(
+            "Content-Type", "image/jpeg"
+        ).split(";")[0].strip().lower()
+
+        if content_type not in (
+            "image/jpeg",
+            "image/png",
+            "image/webp",
+            "image/gif",
+        ):
+            print(f"Unexpected thumbnail content type: {content_type}")
+            return None
+
+        encoded = base64.b64encode(response.content).decode("ascii")
+        return f"data:{content_type};base64,{encoded}"
+
+    except requests.RequestException as exc:
+        print(f"Could not download thumbnail: {exc}")
+        return None
+
+
 def create_svg(song):
     title = escape(song["title"])
     artist = escape(song["artist"])
     url = escape(song.get("url") or BASE_URL, quote=True)
-    thumbnail = song.get("thumbnail")
+    thumbnail = embed_thumbnail(song.get("thumbnail"))
 
     if thumbnail:
         image = f"""
-        <image href="{escape(thumbnail, quote=True)}"
+        <image href="{thumbnail}"
                x="24" y="24" width="104" height="104"
                preserveAspectRatio="xMidYMid slice"
                clip-path="url(#coverClip)"/>
