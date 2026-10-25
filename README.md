@@ -63,7 +63,7 @@ Save the cookies locally in a ".json" file using this format:
 Once the workflow completes successfully, your card should be available on GitHub Pages. You can then embed the SVG in your GitHub README.
 
 ## License
-This project is licensed under the "MIT License" (LICENSE).
+This project is licensed under the [MIT License](LICENSE).
 
 ## Support
 If you find this project useful, consider giving it a ⭐ on GitHub. ♡
