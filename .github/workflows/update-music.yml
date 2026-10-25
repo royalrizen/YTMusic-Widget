@@ -9,7 +9,7 @@ on:
       - main
     paths:
       - "scripts/ytmusic_widget.py"
-      - "site/index.html"
+      - "index.html"
       - ".github/workflows/update-music.yml"
 
 permissions:
@@ -44,9 +44,10 @@ jobs:
 
       - name: Prepare website
         run: |
-          mkdir -p site
-          cp scripts/listening.svg site/listening.svg
-          cp scripts/now_playing.json site/now_playing.json
+          mkdir -p public
+          cp index.html public/index.html
+          cp scripts/listening.svg public/listening.svg
+          cp scripts/now_playing.json public/now_playing.json
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
@@ -54,7 +55,7 @@ jobs:
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: site
+          path: public
 
       - name: Deploy to GitHub Pages
         uses: actions/deploy-pages@v4
