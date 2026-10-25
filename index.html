@@ -1,98 +1,184 @@
-<!DOCTYPE html><html lang="en">
+<!DOCTYPE html>
+<html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#780018">
     <meta name="description" content="My latest YouTube Music listening card.">
-    <title>YouTube Music Card</title><style>
-    * {
-        box-sizing: border-box;
-    }
+    <title>YouTube Music Card</title>
 
-    body {
-        margin: 0;
-        min-height: 100vh;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        padding: 24px 0;
-        background: #0d1117;
-        color: #ffffff;
-        font-family: Arial, sans-serif;
-    }
+    <style>
+        * {
+            box-sizing: border-box;
+        }
 
-    main {
-        width: min(480px, calc(100% - 32px));
-        text-align: center;
-    }
+        body {
+            margin: 0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px 16px;
+            background: #0d1117;
+            color: #ffffff;
+            font-family: Arial, sans-serif;
+        }
 
-    h1 {
-        font-size: 22px;
-        margin: 0 0 24px;
-    }
+        main {
+            width: 100%;
+            max-width: 480px;
+            text-align: center;
+        }
 
-    .card {
-        display: block;
-        width: 100%;
-        border-radius: 14px;
-        overflow: hidden;
-    }
+        h1 {
+            font-size: 22px;
+            margin: 0 0 24px;
+        }
 
-    .card img {
-        display: block;
-        width: 100%;
-        height: auto;
-    }
+        .card {
+            display: block;
+            width: 100%;
+            border-radius: 14px;
+            overflow: hidden;
+            background: #161b22;
+        }
 
-    .footer {
-        margin-top: 20px;
-        color: #8b949e;
-        font-size: 12px;
-    }
+        .card img {
+            display: block;
+            width: 100%;
+            height: auto;
+            min-height: 100px;
+        }
 
-    a {
-        color: #ff6b81;
-        text-decoration: none;
-    }
+        .status {
+            margin-top: 16px;
+            color: #8b949e;
+            font-size: 13px;
+            overflow-wrap: anywhere;
+        }
 
-    .card:focus-visible {
-        outline: 2px solid #ff6b81;
-        outline-offset: 4px;
-    }
-</style>
+        .footer {
+            margin-top: 20px;
+            color: #8b949e;
+            font-size: 12px;
+        }
 
-</head><body>
+        a {
+            color: #ff6b81;
+            text-decoration: none;
+        }
+
+        a:hover {
+            text-decoration: underline;
+        }
+
+        .card:focus-visible {
+            outline: 2px solid #ff6b81;
+            outline-offset: 4px;
+        }
+
+        .error {
+            padding: 24px 12px;
+            border: 1px solid #30363d;
+            border-radius: 12px;
+            background: #161b22;
+            color: #ff8e9e;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+    </style>
+</head>
+
+<body>
     <main>
-        <h1>YouTube Music</h1>    <a
-        class="card"
-        href="https://music.youtube.com/"
-        target="_blank"
-        rel="noopener noreferrer"
-        aria-label="Open YouTube Music"
-    >
-        <img
-            id="listening-card"
-            src="/YTMusic-Widget/listening.svg"
-            alt="YouTube Music Card"
+        <h1>YouTube Music</h1>
+
+        <a
+            class="card"
+            id="music-link"
+            href="https://music.youtube.com/"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="Open the currently displayed YouTube Music track"
         >
-    </a>
+            <img
+                id="listening-card"
+                src="./listening.svg"
+                alt="YouTube Music listening card"
+            >
+        </a>
 
-    <div class="footer">
-        Powered by YouTube Music
-    </div>
-</main>
+        <div class="status" id="status" role="status">
+            Loading listening card...
+        </div>
 
-<script>
-    const card = document.getElementById("listening-card");
-    const cardPath = "/YTMusic-Widget/listening.svg";
+        <div class="footer">
+            Powered by YouTube Music
+            <br><br>
+            <a href="./listening.svg" target="_blank" rel="noopener noreferrer">
+                Open SVG directly
+            </a>
+            &nbsp;·&nbsp;
+            <a href="./now_playing.json" target="_blank" rel="noopener noreferrer">
+                View song data
+            </a>
+        </div>
+    </main>
 
-    function refreshCard() {
-        card.src = `${cardPath}?t=${Date.now()}`;
-    }
+    <script>
+        const card = document.getElementById("listening-card");
+        const status = document.getElementById("status");
+        const musicLink = document.getElementById("music-link");
 
-    // Refresh the card every 60 seconds.
-    setInterval(refreshCard, 60000);
-</script>
+        let loadedOnce = false;
 
+        function refreshCard() {
+            const imageUrl = "./listening.svg?t=" + Date.now();
+
+            card.onload = function () {
+                loadedOnce = true;
+                status.textContent = "Listening card loaded.";
+                card.style.display = "block";
+            };
+
+            card.onerror = function () {
+                card.style.display = "none";
+                status.innerHTML =
+                    'Could not load listening.svg.<br>' +
+                    'Check whether the GitHub Pages deployment succeeded. ' +
+                    '<a href="./listening.svg" target="_blank" rel="noopener noreferrer">' +
+                    'Try opening the SVG directly</a>.';
+            };
+
+            card.src = imageUrl;
+        }
+
+        async function updateTrackLink() {
+            try {
+                const response = await fetch(
+                    "./now_playing.json?t=" + Date.now(),
+                    { cache: "no-store" }
+                );
+
+                if (!response.ok) {
+                    throw new Error("Song data is unavailable.");
+                }
+
+                const data = await response.json();
+
+                if (data.url) {
+                    musicLink.href = data.url;
+                }
+            } catch (error) {
+                console.warn("Could not load track URL:", error);
+            }
+        }
+
+        refreshCard();
+        updateTrackLink();
+
+        setInterval(refreshCard, 60000);
+        setInterval(updateTrackLink, 60000);
+    </script>
 </body>
 </html>
