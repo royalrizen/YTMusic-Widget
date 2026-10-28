@@ -1,133 +1,205 @@
-import base64
-import json
 import os
 import re
-import requests
+import json
+import html
+import base64
+import codecs
 from pathlib import Path
-from html import escape, unescape
+import requests
+from dotenv import load_dotenv
 
-BASE_URL = "https://music.youtube.com"
 SCRIPT_DIR = Path(__file__).resolve().parent
-
+PROJECT_DIR = SCRIPT_DIR.parent
+load_dotenv(PROJECT_DIR / ".env")
+BASE_URL = "https://music.youtube.com"
 COOKIE_JSON = os.environ.get("YTMUSIC_COOKIES")
-OUTPUT_FILE = SCRIPT_DIR / "now_playing.json"
-SVG_FILE = SCRIPT_DIR / "listening.svg"
-
-SHOW_ALL_SONGS = False
-MAX_SONGS = 50
+JSON_OUTPUT = PROJECT_DIR / "now_playing.json"
+SVG_OUTPUT = PROJECT_DIR / "listening.svg"
 
 
 def create_session():
     if not COOKIE_JSON:
-        raise RuntimeError("YTMUSIC_COOKIES secret is missing.")
+        raise RuntimeError("Configuration error.")
 
     try:
         cookies = json.loads(COOKIE_JSON)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError("YTMUSIC_COOKIES must contain valid JSON.") from exc
+    except (ValueError, TypeError):
+        raise RuntimeError("Configuration error.") from None
 
-    if not isinstance(cookies, dict):
-        raise ValueError("YTMUSIC_COOKIES must contain a JSON object.")
+    if not isinstance(cookies, (dict, list)):
+        raise RuntimeError("Configuration error.")
 
     session = requests.Session()
     session.headers.update({
-        "User-Agent": (
-            "Mozilla/5.0 (X11; Linux x86_64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/139.0.0.0 Safari/537.36"
-        ),
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
         "Accept-Language": "en-US,en;q=0.9",
     })
 
-    for name, value in cookies.items():
-        session.cookies.set(
-            name,
-            str(value),
-            domain=".youtube.com",
-            path="/",
-        )
+    if isinstance(cookies, dict):
+        for name, value in cookies.items():
+            session.cookies.set(name, str(value), domain=".youtube.com")
+    else:
+        for cookie in cookies:
+            if isinstance(cookie, dict) and "name" in cookie and "value" in cookie:
+                session.cookies.set(
+                    cookie["name"],
+                    str(cookie["value"]),
+                    domain=cookie.get("domain", ".youtube.com"),
+                    path=cookie.get("path", "/"),
+                )
 
     return session
 
 
 def fetch_history(session):
-    response = session.get(
-        f"{BASE_URL}/history",
-        headers={
-            "Referer": BASE_URL + "/",
-            "Cache-Control": "no-cache, no-store, max-age=0",
-            "Pragma": "no-cache",
-        },
-        timeout=30,
-    )
+    response = session.get(f"{BASE_URL}/history", timeout=30)
     response.raise_for_status()
     return response.text
 
 
-def extract_initial_data(html):
-    pattern = r"""initialData\.push\(\{[^}]*data:\s*'((?:\\.|[^'])*)'"""
+def contains_history(data):
+    if isinstance(data, dict):
+        if "musicShelfRenderer" in data:
+            return True
+        return any(contains_history(value) for value in data.values())
 
-    for match in re.findall(pattern, html):
-        decoded = re.sub(
-            r"\\x([0-9a-fA-F]{2})",
-            lambda m: chr(int(m.group(1), 16)),
-            match,
-        )
+    if isinstance(data, list):
+        return any(contains_history(item) for item in data)
+
+    return False
+
+
+def extract_initial_data(page):
+    pattern = (
+        r"initialData\.push\(\{path:\s*'([^']*)'.*?"
+        r"data:\s*'((?:\\.|[^'])*)'\s*\}\);"
+    )
+
+    for match in re.finditer(pattern, page, re.DOTALL):
+        path = match.group(1)
+        raw_data = match.group(2)
+        decoded = raw_data.replace(r"\/", "/")
 
         try:
+            decoded = codecs.decode(decoded, "unicode_escape")
             data = json.loads(decoded)
-            if isinstance(data, dict) and contains_history(data):
-                return data
-        except json.JSONDecodeError:
+        except (ValueError, UnicodeError):
             continue
+
+        if "browse" in path and contains_history(data):
+            return data
 
     return None
 
 
-def contains_history(data):
-    text = json.dumps(data, ensure_ascii=False)
-    return "musicShelfRenderer" in text or "FEmusic_history" in text
+def get_text(value):
+    if not isinstance(value, dict):
+        return ""
 
+    if "simpleText" in value:
+        return value["simpleText"]
 
-def get_runs(column):
-    return (
-        column.get("musicResponsiveListItemFlexColumnRenderer", {})
-        .get("text", {})
-        .get("runs", [])
+    return "".join(
+        run.get("text", "")
+        for run in value.get("runs", [])
+        if isinstance(run, dict)
     )
+
+
+def find_shelves(data):
+    shelves = []
+
+    if isinstance(data, dict):
+        shelf = data.get("musicShelfRenderer")
+
+        if isinstance(shelf, dict):
+            shelves.append(shelf)
+
+        for value in data.values():
+            shelves.extend(find_shelves(value))
+
+    elif isinstance(data, list):
+        for item in data:
+            shelves.extend(find_shelves(item))
+
+    return shelves
+
+
+def get_video_id(renderer):
+    video_id = renderer.get("playlistItemData", {}).get("videoId")
+
+    if video_id:
+        return video_id
+
+    watch = renderer.get("navigationEndpoint", {}).get("watchEndpoint", {})
+
+    if watch.get("videoId"):
+        return watch["videoId"]
+
+    for column in renderer.get("flexColumns", []):
+        column_renderer = column.get(
+            "musicResponsiveListItemFlexColumnRenderer", {}
+        )
+
+        for run in column_renderer.get("text", {}).get("runs", []):
+            watch = (
+                run.get("navigationEndpoint", {})
+                .get("watchEndpoint", {})
+            )
+
+            if watch.get("videoId"):
+                return watch["videoId"]
+
+    return ""
+
+
+def get_thumbnail(renderer):
+    thumbnails = []
+
+    for key in ("thumbnail", "thumbnailRenderer"):
+        value = renderer.get(key, {})
+
+        thumbnails.extend(
+            value.get("musicThumbnailRenderer", {})
+            .get("thumbnail", {})
+            .get("thumbnails", [])
+        )
+
+        thumbnails.extend(
+            value.get("croppedSquareThumbnailRenderer", {})
+            .get("thumbnail", {})
+            .get("thumbnails", [])
+        )
+
+    return max(
+        thumbnails,
+        key=lambda item: item.get("width", 0) * item.get("height", 0),
+        default={},
+    ).get("url", "")
 
 
 def parse_track(renderer):
-    title = None
-    artist = None
-    video_id = None
+    title = ""
+    artist = ""
     fallback_artists = []
+    columns = renderer.get("flexColumns", [])
 
-    thumbnails = (
-        renderer.get("thumbnail", {})
-        .get("musicThumbnailRenderer", {})
-        .get("thumbnail", {})
-        .get("thumbnails", [])
-    )
+    for column in columns:
+        column_renderer = column.get(
+            "musicResponsiveListItemFlexColumnRenderer", {}
+        )
 
-    thumbnail_url = max(
-        thumbnails,
-        key=lambda t: t.get("width", 0) * t.get("height", 0),
-        default={},
-    ).get("url")
-
-    for column in renderer.get("flexColumns", []):
-        for run in get_runs(column):
+        for run in column_renderer.get("text", {}).get("runs", []):
             text = run.get("text", "").strip()
+
             if not text:
                 continue
 
             endpoint = run.get("navigationEndpoint", {})
             watch = endpoint.get("watchEndpoint", {})
 
-            if watch and not title:
+            if watch.get("videoId") and not title:
                 title = text
-                video_id = watch.get("videoId")
                 continue
 
             browse = endpoint.get("browseEndpoint", {})
@@ -147,70 +219,70 @@ def parse_track(renderer):
     if not artist and fallback_artists:
         artist = fallback_artists[0]
 
-    if not title or not artist:
+    if not title:
+        texts = []
+
+        for column in columns:
+            column_renderer = column.get(
+                "musicResponsiveListItemFlexColumnRenderer", {}
+            )
+            text = get_text(column_renderer.get("text", {}))
+
+            if text:
+                texts.append(text)
+
+        if texts:
+            title = texts[0]
+
+        if not artist and len(texts) > 1:
+            artist = texts[1]
+
+    if not title:
         return None
 
+    video_id = get_video_id(renderer)
+
     return {
-        "title": unescape(title),
-        "artist": unescape(artist),
+        "title": html.unescape(title),
+        "artist": html.unescape(artist or "Unknown artist"),
+        "album": "",
+        "videoId": video_id,
         "url": (
             f"https://music.youtube.com/watch?v={video_id}"
             if video_id
-            else None
+            else ""
         ),
-        "thumbnail": thumbnail_url,
+        "thumbnail": get_thumbnail(renderer),
     }
 
 
-def get_songs(data, all_songs=False, limit=50):
-    songs = []
+def extract_tracks(data):
+    tracks = []
     seen = set()
 
-    tabs = (
-        data.get("contents", {})
-        .get("singleColumnBrowseResultsRenderer", {})
-        .get("tabs", [])
-    )
+    for shelf in find_shelves(data):
+        for item in shelf.get("contents", []):
+            renderer = item.get("musicResponsiveListItemRenderer")
 
-    for tab in tabs:
-        sections = (
-            tab.get("tabRenderer", {})
-            .get("content", {})
-            .get("sectionListRenderer", {})
-            .get("contents", [])
-        )
-
-        for section in sections:
-            shelf = section.get("musicShelfRenderer")
-            if not shelf:
+            if not isinstance(renderer, dict):
                 continue
 
-            for item in shelf.get("contents", []):
-                renderer = item.get("musicResponsiveListItemRenderer")
-                if not renderer:
-                    continue
+            track = parse_track(renderer)
 
-                song = parse_track(renderer)
-                if not song:
-                    continue
+            if not track:
+                continue
 
-                video_id = (
-                    song["url"].split("v=", 1)[1]
-                    if song["url"]
-                    else None
-                )
+            identifier = track["videoId"] or (
+                track["title"] + track["artist"]
+            )
 
-                if video_id:
-                    if video_id in seen:
-                        continue
-                    seen.add(video_id)
+            if identifier in seen:
+                continue
 
-                songs.append(song)
+            seen.add(identifier)
+            tracks.append(track)
 
-                if not all_songs or len(songs) >= limit:
-                    return songs
-
-    return songs
+    return tracks
 
 
 def embed_thumbnail(thumbnail_url):
@@ -221,13 +293,7 @@ def embed_thumbnail(thumbnail_url):
         response = requests.get(
             thumbnail_url,
             timeout=15,
-            headers={
-                "User-Agent": (
-                    "Mozilla/5.0 (X11; Linux x86_64) "
-                    "AppleWebKit/537.36 Chrome/139.0.0.0 "
-                    "Safari/537.36"
-                )
-            },
+            headers={"User-Agent": "Mozilla/5.0"},
         )
         response.raise_for_status()
 
@@ -241,21 +307,19 @@ def embed_thumbnail(thumbnail_url):
             "image/webp",
             "image/gif",
         ):
-            print(f"Unexpected thumbnail content type: {content_type}")
             return None
 
         encoded = base64.b64encode(response.content).decode("ascii")
         return f"data:{content_type};base64,{encoded}"
 
-    except requests.RequestException as exc:
-        print(f"Could not download thumbnail: {exc}")
+    except requests.RequestException:
         return None
 
 
 def create_svg(song):
-    title = escape(song["title"])
-    artist = escape(song["artist"])
-    url = escape(song.get("url") or BASE_URL, quote=True)
+    title = html.escape(song["title"])
+    artist = html.escape(song["artist"])
+    url = html.escape(song.get("url") or BASE_URL, quote=True)
     thumbnail = embed_thumbnail(song.get("thumbnail"))
 
     if thumbnail:
@@ -275,131 +339,67 @@ def create_svg(song):
 
     return f"""<svg xmlns="http://www.w3.org/2000/svg"
         width="440" height="152" viewBox="0 0 440 152">
-
       <defs>
         <clipPath id="coverClip">
           <rect x="24" y="24" width="104" height="104" rx="4"/>
         </clipPath>
-
         <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
           <stop offset="0%" stop-color="#182169"/>
           <stop offset="100%" stop-color="#182169"/>
         </linearGradient>
       </defs>
-
       <rect width="440" height="152" rx="14" fill="url(#bg)"/>
-
       {image}
-
-      <text x="150" y="34"
-            fill="#FFFFFF"
-            font-family="Arial,sans-serif"
-            font-size="10"
-            font-weight="bold"
-            letter-spacing="1.8">NOW PLAYING</text>
-
+      <text x="150" y="34" fill="#FFFFFF"
+            font-family="Arial,sans-serif" font-size="10"
+            font-weight="bold" letter-spacing="1.8">NOW PLAYING</text>
       <a href="{url}">
-        <text x="150" y="66"
-              fill="#FFFFFF"
-              font-family="Arial,sans-serif"
-              font-size="17"
+        <text x="150" y="66" fill="#FFFFFF"
+              font-family="Arial,sans-serif" font-size="17"
               font-weight="bold">{title[:34]}</text>
       </a>
-
-      <text x="150" y="91"
-            fill="#FFFFFF"
-            opacity="0.85"
-            font-family="Arial,sans-serif"
-            font-size="13">{artist[:36]}</text>
-
-      <text x="150" y="121"
-            fill="#FFFFFF"
-            opacity="0.7"
-            font-family="Arial,sans-serif"
-            font-size="10"
+      <text x="150" y="91" fill="#FFFFFF" opacity="0.85"
+            font-family="Arial,sans-serif" font-size="13">{artist[:36]}</text>
+      <text x="150" y="121" fill="#FFFFFF" opacity="0.7"
+            font-family="Arial,sans-serif" font-size="10"
             letter-spacing="1.5">YOUTUBE MUSIC</text>
-
       <g transform="translate(380,105)" fill="#FFFFFF" opacity="0.9">
         <rect x="0" y="10" width="4" height="12" rx="2"/>
         <rect x="8" y="3" width="4" height="19" rx="2"/>
         <rect x="16" y="0" width="4" height="22" rx="2"/>
         <rect x="24" y="7" width="4" height="15" rx="2"/>
       </g>
-
-    </svg>"""
-
-
-def create_history_svg(songs):
-    if not songs:
-        raise RuntimeError("No songs found in listening history.")
-
-    card_height = 152
-    gap = 10
-    total_height = len(songs) * card_height + (len(songs) - 1) * gap
-
-    cards = []
-
-    for index, song in enumerate(songs):
-        svg = create_svg(song)
-        inner = svg[svg.index("<defs>"):svg.rindex("</svg>")]
-        y = index * (card_height + gap)
-
-        cards.append(
-            f'<svg x="0" y="{y}" width="440" height="{card_height}" '
-            f'viewBox="0 0 440 152">{inner}</svg>'
-        )
-
-    return f"""<svg xmlns="http://www.w3.org/2000/svg"
-        width="440" height="{total_height}"
-        viewBox="0 0 440 {total_height}">
-        {''.join(cards)}
     </svg>"""
 
 
 def main():
+    JSON_OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+
     with create_session() as session:
-        html = fetch_history(session)
+        page = fetch_history(session)
 
-    data = extract_initial_data(html)
-    if not data:
-        raise RuntimeError("Could not extract YouTube Music history.")
+    data = extract_initial_data(page)
 
-    songs = get_songs(
-        data,
-        all_songs=SHOW_ALL_SONGS,
-        limit=MAX_SONGS,
-    )
+    if data is None:
+        raise RuntimeError("Could not retrieve music data.")
 
-    if not songs:
-        raise RuntimeError("No songs found in listening history.")
+    tracks = extract_tracks(data)
 
-    output = songs if SHOW_ALL_SONGS else songs[0]
+    if not tracks:
+        raise RuntimeError("No music data available.")
 
-    OUTPUT_FILE.write_text(
-        json.dumps(output, ensure_ascii=False, indent=2),
+    song = tracks[0]
+
+    JSON_OUTPUT.write_text(
+        json.dumps(song, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 
-    svg = (
-        create_history_svg(songs)
-        if SHOW_ALL_SONGS
-        else create_svg(songs[0])
-    )
-
-    SVG_FILE.write_text(svg, encoding="utf-8")
-
-    print(f"Saved {len(songs)} song(s).")
-    print(f"JSON: {OUTPUT_FILE}")
-    print(f"SVG:  {SVG_FILE}")
+    SVG_OUTPUT.write_text(create_svg(song), encoding="utf-8")
 
 
 if __name__ == "__main__":
     try:
         main()
-    except (
-        OSError,
-        json.JSONDecodeError,
-        requests.RequestException,
-        RuntimeError,
-    ) as exc:
-        print(f"Error: {exc}")
+    except (OSError, ValueError, requests.RequestException, RuntimeError):
+        print("Unable to update the Now Playing card.")
