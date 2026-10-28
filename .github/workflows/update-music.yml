@@ -5,6 +5,7 @@ on:
     - cron: "*/5 * * * *"
 
   workflow_dispatch:
+
   push:
     branches:
       - main
@@ -49,10 +50,23 @@ jobs:
 
       - name: Prepare website
         run: |
+          set -eu
+
+          echo "Checking repository files..."
+          ls -la
+
+          test -f index.html
+          test -f listening.svg
+          test -f now_playing.json
+
           mkdir -p public
+
           cp index.html public/index.html
           cp listening.svg public/listening.svg
           cp now_playing.json public/now_playing.json
+
+          echo "Files prepared for deployment:"
+          ls -la public
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
