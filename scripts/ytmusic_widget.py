@@ -6,11 +6,11 @@ import base64
 import codecs
 from pathlib import Path
 import requests
-from dotenv import load_dotenv
+#from dotenv import load_dotenv
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = SCRIPT_DIR.parent
-load_dotenv(PROJECT_DIR / ".env")
+#load_dotenv(PROJECT_DIR / ".env")
 BASE_URL = "https://music.youtube.com"
 COOKIE_JSON = os.environ.get("YTMUSIC_COOKIES")
 JSON_OUTPUT = PROJECT_DIR / "now_playing.json"
