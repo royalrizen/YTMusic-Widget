@@ -51,8 +51,8 @@ jobs:
         run: |
           mkdir -p public
           cp index.html public/index.html
-          cp scripts/listening.svg public/listening.svg
-          cp scripts/now_playing.json public/now_playing.json
+          cp listening.svg public/listening.svg
+          cp now_playing.json public/now_playing.json
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
