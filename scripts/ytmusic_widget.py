@@ -268,7 +268,7 @@ def create_svg(song):
     else:
         image = """
         <rect x="24" y="24" width="104" height="104" rx="8"
-              fill="#B20710"/>
+              fill="#182169"/>
         <text x="76" y="86" text-anchor="middle"
               font-size="34" fill="#FFFFFF">♫</text>
         """
@@ -282,8 +282,8 @@ def create_svg(song):
         </clipPath>
 
         <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stop-color="#780018"/>
-          <stop offset="100%" stop-color="#780018"/>
+          <stop offset="0%" stop-color="#182169"/>
+          <stop offset="100%" stop-color="#182169"/>
         </linearGradient>
       </defs>
 
